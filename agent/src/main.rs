@@ -566,7 +566,30 @@ pub fn core_binary() -> Option<std::path::PathBuf> {
     // being found.
     crate::install_core::migrate_legacy_dir();
     let dir = crate::paths::core_dir();
-    core_leaves().iter().map(|l| dir.join(l)).find(|p| p.exists())
+    if let Some(path) = core_leaves().iter().map(|l| dir.join(l)).find(|p| p.exists()) {
+        return Some(path);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        const SYSTEM_CANDIDATES: &[&str] = &[
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/google-chrome",
+            "/snap/bin/chromium",
+            "/usr/bin/brave-browser",
+        ];
+        for bin in SYSTEM_CANDIDATES {
+            let p = std::path::PathBuf::from(bin);
+            if p.exists() {
+                tracing::info!(system_browser = %bin, "using system browser fallback on Linux");
+                return Some(p);
+            }
+        }
+    }
+
+    None
 }
 
 /// Something wrong with how the core is being found, in a sentence.

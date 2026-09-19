@@ -58,6 +58,12 @@ fi
 
 # Prefix match, so variants like macos-arm64-lowmem resolve to the right platform.
 case "$TARGET" in
+  linux-x64*)
+    [ "$(uname -s)" = "Linux" ] || {
+      echo "!! Linux targets require Linux." >&2
+      exit 1
+    }
+    ;;
   macos-arm64*|macos-x64*)
     [ "$(uname -s)" = "Darwin" ] || {
       echo "!! macOS targets require a physical Mac. There is no cross-compile." >&2
