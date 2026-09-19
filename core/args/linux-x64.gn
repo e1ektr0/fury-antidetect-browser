@@ -40,3 +40,4 @@ chrome_pgo_phase = 0
 # --- match real Chrome's feature set ----------------------------------------
 disable_fieldtrial_testing_config = true
 use_siso = false
+concurrent_links = 1
