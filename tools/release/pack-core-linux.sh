@@ -10,7 +10,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 version="$(cat "$here/core/CHROMIUM_VERSION" 2>/dev/null || echo "0.1.3")"
-out="${OUT_DIR:-$here/core/src/out/linux-x64}"
+if [ -d "$here/core/src/out/linux-x64.noindex" ]; then out="${OUT_DIR:-$here/core/src/out/linux-x64.noindex}"; else out="${OUT_DIR:-$here/core/src/out/linux-x64}"; fi
 dist="${DIST:-$here/dist}"
 
 if [ ! -d "$out" ]; then

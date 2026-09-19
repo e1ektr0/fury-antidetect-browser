@@ -45,7 +45,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            git python3 curl xz-utils build-essential lsb-release \
+            git python3 curl xz-utils zstd build-essential lsb-release \
             pkg-config bison gperf \
             libglib2.0-dev libgtk-3-dev libnss3-dev libpci-dev \
             libasound2-dev libpulse-dev libxss-dev libxtst-dev \
@@ -63,9 +63,32 @@ jobs:
         run: |
           ./core/build/apply.sh
 
+      - name: Restore build checkpoint (if exists)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CHECKPOINT_TAG="core-linux-checkpoint"
+          OUT_DIR="core/src/out/linux-x64.noindex"
+          if gh release view "$CHECKPOINT_TAG" >/dev/null 2>&1; then
+            echo "Found previous build checkpoint! Downloading..."
+            mkdir -p /tmp/checkpoint "$OUT_DIR"
+            gh release download "$CHECKPOINT_TAG" --dir /tmp/checkpoint || true
+            if compgen -G "/tmp/checkpoint/checkpoint-out-linux-x64.tar.zst*" > /dev/null; then
+              echo "Extracting checkpoint files into $OUT_DIR..."
+              cat /tmp/checkpoint/checkpoint-out-linux-x64.tar.zst* | tar -I zstd -xf - -C "$OUT_DIR"
+              echo "Checkpoint restored successfully!"
+              rm -rf /tmp/checkpoint
+            else
+              echo "No checkpoint files in release $CHECKPOINT_TAG."
+            fi
+          else
+            echo "No existing checkpoint found. Starting fresh build."
+          fi
+
       - name: Build Chromium core
         run: |
-          ./core/build/build.sh linux-x64
+          # Limit compilation step to 330 minutes (5.5h) to leave 30m for checkpoint saving if nearing timeout
+          timeout 330m ./core/build/build.sh linux-x64
 
       - name: Package Linux core tarball
         run: |
@@ -91,3 +114,46 @@ jobs:
               --prerelease
           fi
           echo "Core archive successfully uploaded to release $TAG!"
+
+      - name: Save build checkpoint (if interrupted or failed)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OUT_DIR="core/src/out/linux-x64.noindex"
+          CHECKPOINT_TAG="core-linux-checkpoint"
+
+          # If the final package was successfully built and uploaded, remove checkpoint
+          if [ -d "dist" ] && compgen -G "dist/fury-core-*-linux-x64.tar.xz" > /dev/null; then
+            echo "Build succeeded! Cleaning up checkpoint release..."
+            gh release delete "$CHECKPOINT_TAG" --yes --cleanup-tag || true
+            exit 0
+          fi
+
+          # If compilation started and has ninja log:
+          if [ -d "$OUT_DIR" ] && [ -f "$OUT_DIR/.ninja_log" ]; then
+            echo "Build was incomplete or interrupted. Saving checkpoint for next run..."
+            OBJECTS=$(wc -l < "$OUT_DIR/.ninja_log")
+            echo "Compiled objects recorded in log: $OBJECTS"
+
+            echo "Compressing $OUT_DIR with zstd..."
+            tar -I 'zstd -1 -T0' -cf checkpoint.tar.zst -C "$OUT_DIR" .
+            echo "Archive size: $(du -h checkpoint.tar.zst | cut -f1)"
+
+            echo "Splitting into chunks under 1.8GB..."
+            split -b 1800M -d checkpoint.tar.zst checkpoint-out-linux-x64.tar.zst.part_
+            rm -f checkpoint.tar.zst
+
+            echo "Uploading checkpoint chunks to release $CHECKPOINT_TAG..."
+            if gh release view "$CHECKPOINT_TAG" >/dev/null 2>&1; then
+              gh release upload "$CHECKPOINT_TAG" checkpoint-out-linux-x64.tar.zst.part_* --clobber
+            else
+              gh release create "$CHECKPOINT_TAG" checkpoint-out-linux-x64.tar.zst.part_* \
+                --title "Chromium Core Build Checkpoint (Linux x64)" \
+                --notes "Automated incremental build cache for resuming interrupted builds." \
+                --prerelease
+            fi
+            echo "Checkpoint saved! Next run will resume from object #$OBJECTS."
+          else
+            echo "No output files to checkpoint."
+          fi
