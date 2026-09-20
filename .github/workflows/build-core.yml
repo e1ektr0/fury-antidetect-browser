@@ -78,6 +78,8 @@ jobs:
               cat /tmp/checkpoint/checkpoint-out-linux-x64.tar.zst* | tar -I zstd -xf - -C "$OUT_DIR"
               echo "Checkpoint restored successfully!"
               rm -rf /tmp/checkpoint
+              echo "Normalizing source timestamps so ninja does not rebuild existing objects..."
+              ./tools/ci/normalize-source-mtimes.py core
             else
               echo "No checkpoint files in release $CHECKPOINT_TAG."
             fi
