@@ -549,6 +549,12 @@ mod tests {
         ensure_executable(&fake).unwrap();
 
         let err = probe_version(&fake).unwrap_err().to_string();
+        // Windows probes the PE version resource rather than executing a
+        // browser with --version (which would hang). The same invalid fixture
+        // must be refused, but the failure occurs at a different boundary.
+        #[cfg(windows)]
+        assert!(err.contains("reading the version"), "{err}");
+        #[cfg(not(windows))]
         assert!(err.contains("does not start"), "{err}");
         std::fs::remove_dir_all(&dir).ok();
     }

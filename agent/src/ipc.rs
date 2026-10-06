@@ -29,6 +29,9 @@ use crate::launcher;
 use crate::paths;
 use crate::store::{Profile, Proxy, Store};
 
+mod management;
+pub use management::ManagementError;
+
 #[derive(Debug, Deserialize)]
 struct Request {
     #[serde(default)]
@@ -105,6 +108,8 @@ struct Running {
 pub struct Agent {
     store: Store,
     running: Mutex<HashMap<String, Running>>,
+    lifecycle: std::sync::Mutex<HashMap<String, std::sync::Weak<Mutex<()>>>>,
+    shutting_down: std::sync::atomic::AtomicBool,
     /// Deliberately NOT a field holding the path. See [`Self::core`].
     /// Progress of a core download, if one was asked for. Shared rather than
     /// owned because the download outlives the IPC call that started it: 134 MB
@@ -220,6 +225,8 @@ impl Agent {
         let agent = Arc::new(Self {
             store,
             running: Mutex::new(HashMap::new()),
+            lifecycle: Default::default(),
+            shutting_down: Default::default(),
             core_download: Default::default(),
             mirror: crate::mirror::Hub::new(),
             warmer: crate::warm::Warmer::new(),
@@ -397,6 +404,7 @@ impl Agent {
         params: serde_json::Value,
     ) -> anyhow::Result<serde_json::Value> {
         use serde_json::json;
+        self.ensure_accepting()?;
 
         match method {
             "status" => {
@@ -1115,8 +1123,8 @@ impl Agent {
                 // for two seconds is the difference between the interface
                 // feeling alive and feeling stuck.
                 let mut running = self.running.lock().await;
-                running.retain(|_, entry| !matches!(entry.child.try_wait(), Ok(Some(_))));
-                let running = running;
+                // Keep exited entries until stop/reaper can abort their relay
+                // and heartbeat. Dropping JoinHandles merely detaches tasks.
                 // The list is the only place the shell learns what is open, so
                 // the answer has to come from the supervisor rather than from a
                 // flag in the database that a crash would leave stale.
@@ -1124,48 +1132,22 @@ impl Agent {
                     .drain(..)
                     .map(|p| {
                         let mut v = serde_json::to_value(&p).unwrap_or_default();
-                        v["running"] = json!(running.contains_key(&p.id));
+                        v["running"] = json!(running.get_mut(&p.id)
+                            .is_some_and(|entry| !matches!(entry.child.try_wait(), Ok(Some(_)))));
                         v
                     })
                     .collect();
                 Ok(serde_json::to_value(out)?)
             }
             "profiles.upsert" => {
-                let profile: Profile = serde_json::from_value(params)?;
-
-                // The persona is checked HERE rather than only at launch.
-                //
-                // `launch` already refuses an inconsistent one, and that is the
-                // backstop — but it means the operator finds out when they
-                // click open, after the profile is made, named and filed. A
-                // persona that cannot exist is a property of the profile, so
-                // the moment to say so is while it is being written.
-                //
-                // An unknown id is refused for the same reason: it is a profile
-                // that will never open, and storing it is storing a fault.
-                let persona = crate::personas::load(&profile.persona_id).map_err(|_| {
-                    anyhow::anyhow!(
-                        "no persona {:?} — `personas.list` has the ones that exist",
-                        profile.persona_id
-                    )
-                })?;
-                if let Err(errs) = persona.validate() {
-                    anyhow::bail!(
-                        "persona {} is inconsistent and a profile using it would \
-                         stand out:\n  {}",
-                        persona.id,
-                        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n  ")
-                    );
+                let mut profile: Profile = serde_json::from_value(params)?;
+                if profile.id.is_empty() {
+                    profile.id = uuid::Uuid::now_v7().to_string();
                 }
-                // Same reasoning for the hand-set fields: a combination that
-                // cannot exist is said now, not at the first launch.
-                if let Err(errs) = profile.overrides.apply(&persona, &crate::personas::all()) {
-                    anyhow::bail!(
-                        "these machine settings describe a machine that does not exist:\n  {}",
-                        errs.join("\n  ")
-                    );
-                }
-
+                let _guard = self.profile_guard(&profile.id).await;
+                self.ensure_accepting()?;
+                self.ensure_stopped(&profile.id).await?;
+                self.validate_profile(&profile).await?;
                 Ok(json!({ "id": self.store.upsert_profile(&profile).await? }))
             }
             // Make many at once. The one-at-a-time dialog is fine for a first
@@ -1465,7 +1447,7 @@ impl Agent {
                 Ok(json!({ "moved": self.store.move_profiles(&ids, project).await? }))
             }
             "profiles.delete" => {
-                self.store.delete_profile(&str_param(&params, "id")?).await?;
+                self.delete_profile(&str_param(&params, "id")?).await?;
                 Ok(json!({}))
             }
 
@@ -2050,6 +2032,8 @@ impl Agent {
         profile_key: Option<[u8; 32]>,
         cdp: bool,
     ) -> anyhow::Result<serde_json::Value> {
+        let _guard = self.profile_guard(profile_id).await;
+        self.ensure_accepting()?;
         // The lock is renewed from here, before the exit check and the bundle
         // pull, either of which can take longer than the lock lives. Aborted by
         // the guard if the launch fails, so a lock is never kept alive for a
@@ -2597,6 +2581,7 @@ impl Agent {
     }
 
     async fn stop(&self, profile_id: &str) -> anyhow::Result<serde_json::Value> {
+        let _guard = self.profile_guard(profile_id).await;
         // A browser that closes leaves the synchronised group; its socket is
         // about to die anyway, and a member with no browser is a target that
         // swallows every mirrored action.
@@ -2625,7 +2610,16 @@ impl Agent {
         // `ask_to_close` is a SIGHUP on macOS and a WM_CLOSE on Windows; see
         // fury_platform::process for why it is a function both platforms have
         // to implement rather than a `#[cfg(unix)]` one of them can skip.
-        let asked = fury_platform::ask_to_close(&entry.child);
+        // A newly opened or headless browser may not have a visible window yet.
+        // Browser.close takes Chromium's normal flush/exit path when CDP was
+        // explicitly enabled; retain native window/signal shutdown otherwise.
+        let cdp_closed = if let Some(ws) = entry.ws_endpoint.as_deref() {
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                let mut cdp = crate::cookies::Cdp::connect(ws).await?;
+                cdp.call("Browser.close", serde_json::json!({})).await
+            }).await.is_ok_and(|result| result.is_ok())
+        } else { false };
+        let asked = cdp_closed || fury_platform::ask_to_close(&entry.child);
         let close_started = std::time::Instant::now();
         // Bounded: a browser that will not close must not hold the UI.
         let mut exited = false;

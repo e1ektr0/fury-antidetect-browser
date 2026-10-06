@@ -82,16 +82,23 @@ async fn main() -> anyhow::Result<()> {
             // Only when asked for. See http.rs: a loopback port is reachable
             // from a page the browser itself opens, and the defences are worth
             // nothing on a machine whose owner never wanted the port.
-            if let Some(port) = api_port() {
-                let for_api = std::sync::Arc::clone(&agent);
-                tokio::spawn(async move {
-                    if let Err(e) = http::serve(for_api, port).await {
-                        tracing::error!(error = %e, "the local API stopped");
+            let api = match api_port() {
+                Some(port) => Some(http::bind(port).await?),
+                None => None,
+            };
+            let result = tokio::select! {
+                result = std::sync::Arc::clone(&agent).serve() => result,
+                result = async {
+                    if let Some((listener, token)) = api {
+                        http::serve(std::sync::Arc::clone(&agent), listener, token).await
+                    } else {
+                        std::future::pending::<anyhow::Result<()>>().await
                     }
-                });
-            }
-
-            agent.serve().await
+                } => result,
+                result = shutdown_signal() => result,
+            };
+            let cleanup = agent.shutdown().await;
+            result.and(cleanup)
         }
         Some("relay") => cmd_relay(&args[1..]).await,
         Some("launch") => cmd_launch(&args[1..]).await,
@@ -137,6 +144,29 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+async fn shutdown_signal() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        let mut interrupt = tokio::signal::windows::ctrl_c()?;
+        let mut close = tokio::signal::windows::ctrl_close()?;
+        let mut logoff = tokio::signal::windows::ctrl_logoff()?;
+        let mut shutdown = tokio::signal::windows::ctrl_shutdown()?;
+        let mut ctrl_break = tokio::signal::windows::ctrl_break()?;
+        tokio::select! {
+            _ = interrupt.recv() => {}, _ = close.recv() => {},
+            _ = logoff.recv() => {}, _ = shutdown.recv() => {},
+            _ = ctrl_break.recv() => {},
+        }
+    }
+    #[cfg(unix)]
+    {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! { result = tokio::signal::ctrl_c() => result?, _ = term.recv() => {} }
+    }
+    tracing::info!("shutdown requested; closing owned browsers");
+    Ok(())
 }
 
 async fn cmd_relay(args: &[String]) -> anyhow::Result<()> {
