@@ -4,12 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release tag name to attach core to (e.g. v0.1.3)'
+        description: 'Release tag name (blank uses the current Cargo package version)'
         required: false
-        default: 'v0.1.3'
+        default: ''
 
 permissions:
   contents: write
+
+concurrency:
+  group: linux-core-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CHECKPOINT_TAG: core-linux-checkpoint-${{ github.sha }}
 
 jobs:
   build-core:
@@ -67,7 +74,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          CHECKPOINT_TAG="core-linux-checkpoint"
           OUT_DIR="core/src/out/linux-x64.noindex"
           if gh release view "$CHECKPOINT_TAG" >/dev/null 2>&1; then
             echo "Found previous build checkpoint! Downloading..."
@@ -97,10 +103,12 @@ jobs:
           ./tools/release/pack-core-linux.sh
 
       - name: Upload core to GitHub Release
+        id: publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag_name || 'v0.1.3' }}
+          TAG: ${{ inputs.tag_name }}
         run: |
+          TAG="${TAG:-v$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')}"
           CORE_ARCHIVE=$(find dist -name "fury-core-*-linux-x64.tar.xz" | head -n 1)
           if [ -z "$CORE_ARCHIVE" ] || [ ! -f "$CORE_ARCHIVE" ]; then
             echo "Error: Core archive not found!" >&2
@@ -108,9 +116,10 @@ jobs:
           fi
           echo "Uploading $CORE_ARCHIVE to release $TAG..."
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$CORE_ARCHIVE" --clobber
+            gh release upload "$TAG" "$CORE_ARCHIVE" "$CORE_ARCHIVE.sha256" --clobber
           else
-            gh release create "$TAG" "$CORE_ARCHIVE" \
+            gh release create "$TAG" "$CORE_ARCHIVE" "$CORE_ARCHIVE.sha256" \
+              --target "$GITHUB_SHA" \
               --title "Fury $TAG" \
               --notes "Automated build of Fury anti-detect browser." \
               --prerelease
@@ -121,12 +130,12 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISHED: ${{ steps.publish.outcome }}
         run: |
           OUT_DIR="core/src/out/linux-x64.noindex"
-          CHECKPOINT_TAG="core-linux-checkpoint"
 
           # If the final package was successfully built and uploaded, remove checkpoint
-          if [ -d "dist" ] && compgen -G "dist/fury-core-*-linux-x64.tar.xz" > /dev/null; then
+          if [ "$PUBLISHED" = "success" ]; then
             echo "Build succeeded! Cleaning up checkpoint release..."
             gh release delete "$CHECKPOINT_TAG" --yes --cleanup-tag || true
             exit 0

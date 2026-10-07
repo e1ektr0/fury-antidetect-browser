@@ -9,7 +9,6 @@
 #
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-version="$(cat "$here/core/CHROMIUM_VERSION" 2>/dev/null || echo "0.1.3")"
 if [ -d "$here/core/src/out/linux-x64.noindex" ]; then out="${OUT_DIR:-$here/core/src/out/linux-x64.noindex}"; else out="${OUT_DIR:-$here/core/src/out/linux-x64}"; fi
 dist="${DIST:-$here/dist}"
 
@@ -33,13 +32,14 @@ for opt in libvk_swiftshader.so vk_swiftshader_icd.json chrome-sandbox; do
   fi
 done
 
-dirs=(locales resources MEIPreload)
+dirs=(locales resources MEIPreload PrivacySandboxAttestationsPreloaded)
 
 missing=0
 for f in "${files[@]}"; do
   [ -f "$f" ] || { echo "!! missing: $f" >&2; missing=1; }
 done
 [ "$missing" = 0 ] || exit 1
+[ -d locales ] || { echo "!! missing: locales" >&2; exit 1; }
 
 rm -rf "$here/dist-core" && mkdir -p "$here/dist-core/Fury"
 cp -a "${files[@]}" "$here/dist-core/Fury/"
@@ -50,8 +50,9 @@ du -sh "$here/dist-core/Fury" | cut -f1
 
 echo "== packing"
 mkdir -p "$dist"
-pkg_version="$(cargo metadata --format-version 1 --no-deps | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "0.1.3")"
+pkg_version="$(python3 -c 'import tomllib, sys; print(tomllib.load(open(sys.argv[1], "rb"))["workspace"]["package"]["version"])' "$here/Cargo.toml")"
 out_name="fury-core-$pkg_version-linux-x64.tar.xz"
 tar -cJf "$dist/$out_name" -C "$here/dist-core" Fury
+(cd "$dist" && sha256sum "$out_name" > "$out_name.sha256")
 ls -la "$dist/$out_name" | awk '{printf "   %.0f MB\n", $5/1000000}'
 echo "Packaged into: $dist/$out_name"
