@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! A team profile whose last session never reached the server.
 //!
 //! Closing a team profile uploads its bundle. When that upload fails, the

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Exercise Linux release packaging without compiling Chromium."""
 import hashlib
 import pathlib
