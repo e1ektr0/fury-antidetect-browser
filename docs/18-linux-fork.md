@@ -47,8 +47,9 @@ Playwright connects to the running profile over CDP; use the existing browser
 context as shown in `examples/playwright_example.py`. A visible Linux browser
 requires an X server (for Docker, typically Xvfb) and Chromium runtime libraries.
 
-The imported system-browser fallback allows the agent to find ordinary Chromium,
-Chrome, or Brave when no Fury core is installed. **Those browsers do not contain
+The imported system-browser fallback is opt-in with `FURY_ALLOW_SYSTEM_BROWSER=1`.
+It lets the agent find ordinary Chromium, Chrome, or Brave when no Fury core is
+installed. **Those browsers do not contain
 Fury's fingerprint patches.** Automated integrations needing Fury must provision
 the real core explicitly and verify its fingerprint before using it.
 
