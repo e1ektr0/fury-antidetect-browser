@@ -61,6 +61,8 @@ jobs:
         run: |
           bash -n core/build/fetch.sh core/build/build.sh tools/release/build-linux-core.sh tools/release/pack-core-linux.sh
           python3 tools/release/test_linux_packaging.py
+          python3 tools/ci/check-linux-zygote-patch.py
+          node --check tools/verify-linux.mjs
 
   shell-rust:
     name: cargo test (the shell, on macOS)

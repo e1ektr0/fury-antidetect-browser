@@ -1,0 +1,22 @@
+diff --git a/content/app/content_main_runner_impl.cc b/content/app/content_main_runner_impl.cc
+--- a/content/app/content_main_runner_impl.cc
++++ b/content/app/content_main_runner_impl.cc
+@@ -669,6 +669,18 @@ NO_STACK_PROTECTOR int RunZygote(ContentMainDelegate* delegate) {
+   PopulateFileDescriptorStoreFromGlobalDescriptors();
+ 
++  // Forked children do not run ContentMainRunnerImpl::Initialize() again.
++  // Their per-child command line and descriptor mapping only exist now.
++  // Recover the persona before delegates, Blink or workers observe host values.
++  // In particular, the Linux zygote must not freeze an unconfigured renderer.
++  if (command_line->HasSwitch(fury::switches::kFingerprintHandle)) {
++    if (!fury::FuryConfig::InitializeInChild(
++            command_line->GetSwitchValueASCII(
++                fury::switches::kFingerprintHandle))) {
++      LOG(FATAL) << "fury: zygote child could not map the fingerprint config";
++    }
++  }
++
+   delegate->ZygoteForked();
+ 
+   base::allocator::PartitionAllocSupport::Get()->ReconfigureAfterZygoteFork(
+       process_type);
