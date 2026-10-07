@@ -1,0 +1,40 @@
+# GN args — Linux x64 release build.
+# See docs/03-chromium-fork.md.
+
+target_os = "linux"
+target_cpu = "x64"
+
+is_official_build = true
+is_debug = false
+symbol_level = 0
+blink_symbol_level = 0
+dcheck_always_on = false
+
+# --- CRITICAL for anti-detect ------------------------------------------------
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+
+# --- de-Google ---------------------------------------------------------------
+is_chrome_branded = false
+use_official_google_api_keys = false
+google_api_key = ""
+google_default_client_id = ""
+google_default_client_secret = ""
+enable_reporting = false
+enable_remoting = false
+enable_hangout_services_extension = false
+
+# --- Widevine ----------------------------------------------------------------
+enable_widevine = true
+enable_print_preview = true
+
+# --- toolchain & low-memory settings ----------------------------------------
+use_lld = true
+use_thin_lto = false
+is_cfi = false
+chrome_pgo_phase = 0
+concurrent_links = 1
+
+# --- match real Chrome's feature set ----------------------------------------
+disable_fieldtrial_testing_config = true
+use_siso = false

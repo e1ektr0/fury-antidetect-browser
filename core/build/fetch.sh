@@ -32,7 +32,7 @@ echo "==> Chromium $CHROMIUM_VERSION into $SRC"
 # FURY_MIN_FREE_GB lowers the bar for that case (used 29.09.2026 on a laptop
 # with 109 GB free and a 70 GB tree already in place).
 avail_gb=$(df -Pk "$CORE_DIR" | awk 'NR==2 {print int($4/1048576)}')
-if [ "$avail_gb" -lt "${FURY_MIN_FREE_GB:-150}" ]; then
+if [ "$avail_gb" -lt "${FURY_MIN_FREE_GB:-150}" ] && [ "${FORCE:-0}" != "1" ]; then
   echo "!! Only ${avail_gb} GB free. Syncing needs ~100 GB and building ~200 GB." >&2
   echo "!! Free up space or point CORE_DIR at another volume." >&2
   exit 1

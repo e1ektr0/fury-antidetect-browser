@@ -566,7 +566,35 @@ pub fn core_binary() -> Option<std::path::PathBuf> {
     // being found.
     crate::install_core::migrate_legacy_dir();
     let dir = crate::paths::core_dir();
-    core_leaves().iter().map(|l| dir.join(l)).find(|p| p.exists())
+    if let Some(path) = core_leaves().iter().map(|l| dir.join(l)).find(|p| p.exists()) {
+        return Some(path);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // A stock browser cannot apply Fury's C++ fingerprint configuration.
+        // Keep the donor fork's fallback available only by explicit request.
+        if std::env::var("FURY_ALLOW_SYSTEM_BROWSER").as_deref() != Ok("1") {
+            return None;
+        }
+        const SYSTEM_CANDIDATES: &[&str] = &[
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/google-chrome",
+            "/snap/bin/chromium",
+            "/usr/bin/brave-browser",
+        ];
+        for bin in SYSTEM_CANDIDATES {
+            let p = std::path::PathBuf::from(bin);
+            if p.exists() {
+                tracing::warn!(system_browser = %bin, "using opt-in system browser without Fury fingerprint patches");
+                return Some(p);
+            }
+        }
+    }
+
+    None
 }
 
 /// Something wrong with how the core is being found, in a sentence.
@@ -880,6 +908,7 @@ mod tests {
 
     #[test]
     fn a_core_path_that_does_not_exist_does_not_block_the_search() {
+        let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
         // The reversal. A variable naming a file that is not there used to make
         // the application unusable; now it is ignored and reported. Nothing
         // else could be found in a test environment either, so what is asserted

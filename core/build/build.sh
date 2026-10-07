@@ -5,7 +5,7 @@
 # Build the patched Chromium.
 #
 # Usage: core/build/build.sh <target>
-#   targets: macos-arm64 | macos-x64 | windows-x64
+#   targets: macos-arm64 | macos-x64 | windows-x64 | linux-x64
 #
 # Full build: 1.5-3 h on 32+ cores, 4-8 h on a laptop. Incremental after one
 # patch: 5-30 min. Do not delete out/ between runs — that is your ccache.
@@ -13,7 +13,7 @@ set -euo pipefail
 
 CORE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="$CORE_DIR/src"
-TARGET="${1:?usage: build.sh <macos-arm64|macos-x64|windows-x64>}"
+TARGET="${1:?usage: build.sh <macos-arm64|macos-x64|windows-x64|linux-x64>}"
 # `.noindex` is not decoration: it is the only thing measured to work.
 #
 # ninja writes the five helper applications as standalone bundles beside
@@ -58,6 +58,12 @@ fi
 
 # Prefix match, so variants like macos-arm64-lowmem resolve to the right platform.
 case "$TARGET" in
+  linux-x64*)
+    [ "$(uname -s)" = "Linux" ] || {
+      echo "!! Linux targets require Linux." >&2
+      exit 1
+    }
+    ;;
   macos-arm64*|macos-x64*)
     [ "$(uname -s)" = "Darwin" ] || {
       echo "!! macOS targets require a physical Mac. There is no cross-compile." >&2
