@@ -41,6 +41,9 @@
 # InitializeInBrowser takes base::File rather than an int so both slots share
 # one read. The Windows half has never been run: there is no Windows core.
 0001-fp-config-plumbing.patch!          # content_main_runner_impl.cc moves often
+# Linux forked renderers bypass Initialize(); recover their own region after
+# ZygoteMain returns and GlobalDescriptors has been populated for the child.
+0002-linux-zygote-config.patch!
 
 # --- navigator & friends ----------------------------------------------------
 # 0010 covers the Blink side plus the Accept-Language header, which is built in

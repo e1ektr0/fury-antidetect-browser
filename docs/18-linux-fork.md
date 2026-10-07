@@ -55,6 +55,28 @@ the real core explicitly and verify its fingerprint before using it.
 
 ## Verification and current limits
 
+Linux renderers fork from the zygote and do not execute
+`ContentMainRunnerImpl::Initialize()` again. Patch `0002-linux-zygote-config`
+recovers their per-child fingerprint shared-memory region after descriptor
+population in `RunZygote`, before delegates and Blink start. Without it a Windows
+persona can report a Windows UA but Linux `navigator.platform` and the host's UTC
+timezone. This was reproduced with the donor Chromium 153 core; bypassing the
+zygote restored `Win32` and `America/Toronto`, confirming the missing startup path.
+
+After building the corrected core, verify the normal zygote path with a real
+browser (Node 22+, an X display or Xvfb, and the current compiled agent):
+
+```sh
+FURY_CORE=/path/to/Fury/chrome xvfb-run -a node tools/verify-linux.mjs
+```
+
+This checks native main-frame, Worker and iframe platform, timezone, and summer
+UTC offset. It uses neither JS fingerprint shims nor CDP emulation. All three
+must report `Win32`, `America/Toronto`, and `240`. It fails on the old uncorrected
+zygote runtime. A Docker wrapper may add `--no-sandbox` where the container's
+policy requires it, but must not add `--no-zygote` to acceptance verification.
+The diagnostic no-zygote result validates the cause, not a newly compiled patch.
+
 ```sh
 cargo test --workspace --exclude fury-desktop --all-targets
 python3 tools/release/test_linux_packaging.py
